@@ -158,6 +158,7 @@ class BrakeCurveApp(QMainWindow):
         
         # Parameters group with better layout
         param_group = QGroupBox("Parameters")
+        param_group.setObjectName("param_group")
         param_layout = QVBoxLayout()
         param_layout.setSpacing(15)
         
@@ -237,7 +238,7 @@ class BrakeCurveApp(QMainWindow):
         self.ax = self.figure.add_subplot(111)
         self.ax.grid(True, linestyle='--', alpha=0.7)
         self.ax.set_xlabel('Time (s)', fontsize=10)
-        self.ax.set_ylabel('Speed (m/s)', fontsize=10)
+        self.ax.set_ylabel('Speed (mm/s)', fontsize=10)
         self.ax.set_title('Brake Curve', fontsize=12, pad=15)
         
         right_layout.addWidget(self.canvas)
@@ -245,6 +246,13 @@ class BrakeCurveApp(QMainWindow):
         # Add panels to main layout
         layout.addWidget(left_panel)
         layout.addWidget(right_panel, stretch=1)
+        
+        # Add draggable impact line functionality
+        self.impact_line = None
+        self.dragging_impact = False
+        self.canvas.mpl_connect('button_press_event', self.on_mouse_press)
+        self.canvas.mpl_connect('button_release_event', self.on_mouse_release)
+        self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
 
     def select_data_file(self):
         file_name, _ = QFileDialog.getOpenFileName(self, "Select DATA File", "", "DATA Files (*.data);;All Files (*)")
@@ -256,31 +264,94 @@ class BrakeCurveApp(QMainWindow):
     def select_cf1_file(self):
         file_name, _ = QFileDialog.getOpenFileName(self, "Select CF1 File", "", "CF1 Files (*.CF1);;All Files (*)")
         if file_name:
-            self.cf1_file = file_name
-            self.cf1_label.setText(file_name.split('/')[-1])
-            self.cf1_params = self.read_cf1_file()
-            if self.cf1_params:
-                self.speed_spin.setValue(self.cf1_params.get('P0251', 670))
-                self.motor_spin.setValue(self.cf1_params.get('P0360', 1500))
-                self.holes_spin.setValue(self.cf1_params.get('P0361', 4))
-                self.pulses_spin.setValue(self.cf1_params.get('P0544', 5017))
-                self.update_parameters()
+            try:
+                self.cf1_file = file_name
+                self.cf1_label.setText(file_name.split('/')[-1])
+                self.cf1_params = self.read_cf1_file()
+                
+                if self.cf1_params:
+                    print("CF1 parameters read:", self.cf1_params)  # Debug print
+                    
+                    # Update parameter values from CF1 file with explicit type conversion
+                    p251 = int(self.cf1_params.get('P0251', 670))
+                    p360 = int(self.cf1_params.get('P0360', 1500))
+                    p361 = int(self.cf1_params.get('P0361', 4))
+                    p544 = int(self.cf1_params.get('P0544', 5017))
+                    
+                    print(f"Setting values - P251: {p251}, P360: {p360}, P361: {p361}, P544: {p544}")  # Debug print
+                    
+                    # Block signals temporarily to prevent multiple updates
+                    self.speed_spin.blockSignals(True)
+                    self.motor_spin.blockSignals(True)
+                    self.holes_spin.blockSignals(True)
+                    self.pulses_spin.blockSignals(True)
+                    
+                    # Set values
+                    self.speed_spin.setValue(p251)
+                    self.motor_spin.setValue(p360)
+                    self.holes_spin.setValue(p361)
+                    self.pulses_spin.setValue(p544)
+                    
+                    # Unblock signals
+                    self.speed_spin.blockSignals(False)
+                    self.motor_spin.blockSignals(False)
+                    self.holes_spin.blockSignals(False)
+                    self.pulses_spin.blockSignals(False)
+                    
+                    # Update calculated values display
+                    self.update_parameters()
+                    
+                    # Update parameter group title to show file name
+                    param_group = self.findChild(QGroupBox, "param_group")
+                    if param_group:
+                        param_group.setTitle(f"Parameters (from {file_name.split('/')[-1]})")
+                    
+            except Exception as e:
+                print(f"Error loading CF1 file: {str(e)}")
+                import traceback
+                print(f"Traceback: {traceback.format_exc()}")
 
     def update_parameters(self):
         if not self.cf1_params:
             self.cf1_params = {}
+        
+        # Update parameters dictionary
         self.cf1_params['P0251'] = self.speed_spin.value()
         self.cf1_params['P0360'] = self.motor_spin.value()
         self.cf1_params['P0361'] = self.holes_spin.value()
         self.cf1_params['P0544'] = self.pulses_spin.value()
         
-        # Update calculated values display
-        distance_per_pulse = (self.cf1_params['P0251']/10) * 60 / (self.cf1_params['P0360'] * self.cf1_params['P0361'])
-        self.calc_label.setText(
-            f"Calculated Values:\n"
-            f"Distance per pulse: {distance_per_pulse:.6f} cm\n"
-            f"Nominal speed: {self.cf1_params['P0251']/1000:.3f} m/s"
-        )
+        # Calculate and display values
+        try:
+            # Get P0251 (speed in mm/s) and convert to m/s
+            nominal_speed = self.cf1_params['P0251'] / 1000  # mm/s to m/s
+            
+            # Get P0544 (pulses per second)
+            pulses_per_second = self.cf1_params['P0544']
+            
+            # Calculate time between pulses in seconds
+            time_between_pulses = 1 / pulses_per_second if pulses_per_second != 0 else 0
+            
+            # Calculate distance per pulse in cm
+            # (speed in mm/s) / (pulses/s) / 10 = distance in cm
+            distance_per_pulse = self.cf1_params['P0251'] / pulses_per_second / 10 if pulses_per_second != 0 else 0
+            
+            self.calc_label.setText(
+                f"Calculated Values:\n"
+                f"Nominal speed: {nominal_speed:.3f} m/s\n"
+                f"Pulses per second: {pulses_per_second} Hz\n"
+                f"Time between pulses: {time_between_pulses:.6f} s\n"
+                f"Distance per pulse: {distance_per_pulse:.3f} cm"
+            )
+            
+            print(f"\nCalculation details:")
+            print(f"P0251 (Speed): {self.cf1_params['P0251']} m/s")
+            print(f"P0544 (Pulses/s): {pulses_per_second}")
+            print(f"Distance calculation: {self.cf1_params['P0251']}/{pulses_per_second}/10 = {distance_per_pulse:.3f} cm")
+            
+        except Exception as e:
+            print(f"Error calculating parameters: {str(e)}")
+            self.calc_label.setText("Error calculating parameters")
 
     def plot_curve(self):
         try:
@@ -312,7 +383,7 @@ class BrakeCurveApp(QMainWindow):
             self.ax.plot(curve_data['x'], curve_data['y'])
             self.ax.grid(True)
             self.ax.set_xlabel('Time (s)')
-            self.ax.set_ylabel('Speed (m/s)')
+            self.ax.set_ylabel('Speed (mm/s)')
             
             # Update title to show all parameters
             title = (f'Brake Curve\n'
@@ -330,26 +401,29 @@ class BrakeCurveApp(QMainWindow):
             if impact_data:
                 impact_index = impact_data['impact_index']
                 non_zero_count = impact_data['non_zero_count']
+                debug_info = impact_data['debug_info']
                 
-                # Draw impact line
-                impact_time = curve_data['x'][impact_index]
-                self.ax.axvline(x=impact_time, color='red', linestyle='--', label='Impact Point')
+                # Draw impact line and store reference
+                adjusted_index = max(0, impact_index - 2)  # Ensure index doesn't go below 0
+                impact_time = curve_data['x'][adjusted_index]
+                self.impact_line = self.ax.axvline(x=impact_time, color='red', 
+                                                 linestyle='--', label='Impact Point')
+                
+                # Store curve data for manual adjustment
+                self.curve_data = curve_data
                 
                 # Calculate braking distance
                 distance_per_pulse = DataProcessor.calculate_distance_per_pulse(self.cf1_params)
-                braking_pulses = non_zero_count - impact_index
+                braking_pulses = non_zero_count - adjusted_index
                 braking_distance = braking_pulses * distance_per_pulse
                 
                 # Update braking distance display
-                self.braking_label.setText(
-                    f"Braking Analysis:\n"
-                    f"Impact Point: Data #{impact_index + 1}\n"
-                    f"Non-zero Data Points: {non_zero_count}\n"
-                    f"Braking Distance: {braking_distance:.2f} cm"
-                )
+                self.update_braking_info(adjusted_index, non_zero_count, impact_time, 
+                                       braking_distance, debug_info)
                 
                 # Update plot title
-                title += f"\nImpact at {impact_time:.2f}s, Braking Distance: {braking_distance:.2f}cm"
+                title = self.ax.get_title().split('\n')[0]  # Keep first line
+                self.ax.set_title(f"{title}\nImpact at {impact_time:.2f}s, Braking Distance: {braking_distance:.2f}cm")
             
             self.ax.set_title(title)
             self.ax.legend()
@@ -386,7 +460,7 @@ class BrakeCurveApp(QMainWindow):
         self.ax.plot(self.curve_data['x'][:end_idx], self.curve_data['y'][:end_idx])
         self.ax.grid(True)
         self.ax.set_xlabel('Time (s)')
-        self.ax.set_ylabel('Speed (m/s)')
+        self.ax.set_ylabel('Speed (mm/s)')
         self.ax.set_title('Brake Curve')
         
         # Set fixed axis limits
@@ -408,6 +482,93 @@ class BrakeCurveApp(QMainWindow):
         
     def generate_brake_curve(self, data, cf1_params):
         return DataProcessor.generate_brake_curve(data, cf1_params)
+
+    def on_mouse_press(self, event):
+        """Handle mouse press events"""
+        if event.inaxes != self.ax or not self.impact_line:
+            return
+        
+        # Check if click is near the impact line
+        impact_x = self.impact_line.get_xdata()[0]
+        if abs(event.xdata - impact_x) < (max(self.curve_data['x']) * 0.01):  # Within 1% of total time range
+            self.dragging_impact = True
+
+    def on_mouse_release(self, event):
+        """Handle mouse release events"""
+        if self.dragging_impact:
+            self.dragging_impact = False
+            if event.inaxes == self.ax:
+                self.update_impact_point(event.xdata)
+
+    def on_mouse_move(self, event):
+        """Handle mouse movement events"""
+        if not self.dragging_impact or event.inaxes != self.ax:
+            return
+        
+        # Update impact line position
+        self.impact_line.set_xdata([event.xdata, event.xdata])
+        self.canvas.draw()
+
+    def update_impact_point(self, new_time):
+        """Update impact point and recalculate braking distance"""
+        try:
+            if not hasattr(self, 'curve_data') or self.curve_data is None:
+                return
+            
+            # Find the nearest data point index
+            time_array = self.curve_data['x']
+            new_index = np.abs(time_array - new_time).argmin()
+            
+            # Calculate braking distance
+            non_zero_count = np.sum(self.data != 0)
+            distance_per_pulse = DataProcessor.calculate_distance_per_pulse(self.cf1_params)
+            braking_pulses = non_zero_count - new_index
+            braking_distance = braking_pulses * distance_per_pulse
+            
+            # Update display using the common update method
+            self.update_braking_info(
+                index=new_index,
+                non_zero_count=non_zero_count,
+                impact_time=new_time,
+                braking_distance=braking_distance,
+                debug_info=None  # No debug info for manual adjustment
+            )
+            
+            # Update plot title
+            title = self.ax.get_title().split('\n')[0]  # Keep first line
+            self.ax.set_title(f"{title}\nImpact at {new_time:.2f}s, Braking Distance: {braking_distance:.2f}cm")
+            self.canvas.draw()
+            
+        except Exception as e:
+            print(f"Error updating impact point: {str(e)}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
+
+    def update_braking_info(self, index, non_zero_count, impact_time, braking_distance, debug_info=None):
+        """Update braking information display"""
+        # Calculate brake pulses
+        braking_pulses = non_zero_count - index
+        
+        info_text = (
+            f"Braking Analysis:\n"
+            f"Impact Point: Data #{index + 1}\n"
+            f"Non-zero Data Points: {non_zero_count}\n"
+            f"Brake Pulses: {braking_pulses}\n"  # Added brake pulses display
+            f"Braking Distance: {braking_distance:.2f} cm\n"
+            f"Impact Time: {impact_time:.3f} s"
+        )
+        
+        if debug_info:  # Add debug info if available (for automatic detection)
+            info_text += (
+                f"\nImpact Detection Values:\n"
+                f"B values: {', '.join([f'b{i+1}={v:.3f}' for i, v in enumerate(debug_info['b_values'])])}\n"
+                f"C values: {', '.join([f'c{i+1}={v:.3f}' for i, v in enumerate(debug_info['c_values'])])}\n"
+                f"Values above threshold ({self.threshold_spin.value()}): {debug_info['above_threshold_count']}"
+            )
+        else:  # For manual adjustment
+            info_text += "\n(Manual Adjustment)"
+        
+        self.braking_label.setText(info_text)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

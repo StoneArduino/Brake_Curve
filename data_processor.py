@@ -5,8 +5,10 @@ class DataProcessor:
     @staticmethod
     def read_data_file(file_path):
         """
-        Read time difference data from DATA file
-        Returns: Array of time differences (unit: 0.0125ms)
+        Read time difference data from DATA file with special handling:
+        - First 16 values are always read
+        - After that, only read increasing non-zero values
+        - Stop reading when a decreasing value is found (but keep that value)
         """
         try:
             print(f"\nDEBUG: Reading DATA file:")
@@ -38,26 +40,42 @@ class DataProcessor:
                     except ValueError:
                         continue
                 
-                # Filter out consecutive duplicates
+                # Apply the special filtering logic
                 numbers = []
-                if raw_numbers:
-                    numbers.append(raw_numbers[0])  # Keep first value
-                    for i in range(1, len(raw_numbers)):
-                        if raw_numbers[i] != raw_numbers[i-1]:  # Only keep if different from previous
-                            numbers.append(raw_numbers[i])
+                if len(raw_numbers) >= 16:
+                    # Always include first 16 values
+                    numbers.extend(raw_numbers[:16])
+                    
+                    # Process remaining values
+                    last_value = numbers[-1]
+                    for i in range(16, len(raw_numbers)):
+                        current_value = raw_numbers[i]
+                        if current_value == 0:
+                            continue  # Skip zero values
+                            
+                        if current_value <= last_value:
+                            # Include the decreasing value but stop processing
+                            numbers.append(current_value)
+                            break
+                        
+                        numbers.append(current_value)
+                        last_value = current_value
+                else:
+                    # If less than 16 values, include all non-zero values
+                    numbers = [x for x in raw_numbers if x != 0]
                 
                 print(f"DATA file processing summary:")
                 print(f"Total lines: {line_count}")
                 print(f"Raw values: {len(raw_numbers)}")
-                print(f"After removing duplicates: {len(numbers)}")
+                print(f"Processed values: {len(numbers)}")
                 if numbers:
-                    print(f"First few time differences: {numbers[:5]}")
-                    print(f"Last few time differences: {numbers[-5:]}")
+                    print(f"First 16 values: {numbers[:16]}")
+                    print(f"Last few values: {numbers[-5:]}")
                     print(f"Time range: {min(numbers)} - {max(numbers)} (0.0125ms units)")
                     print(f"Number of zero values: {sum(1 for x in numbers if x == 0)}")
-                    print(f"Removed duplicate values: {len(raw_numbers) - len(numbers)}")
                 
                 return np.array(numbers)
+                
         except Exception as e:
             print(f"Error reading DATA file: {str(e)}")
             return None
@@ -87,10 +105,28 @@ class DataProcessor:
                         if len(parts) >= 2 and parts[1].strip():
                             param_num = parts[0].strip()
                             try:
-                                value = int(parts[1].strip())
+                                # Special handling for P0361
+                                if param_num == 'P0361':
+                                    # If P0361 is not found or is 0, use default value 4
+                                    value = int(parts[1].strip())
+                                    if value == 0:
+                                        print("P0361 is 0, using default value 4")
+                                        value = 4
+                                    else:
+                                        value = int(parts[1].strip())
+                                else:
+                                    value = int(parts[1].strip())
                                 params[param_num] = value
                             except ValueError:
+                                if param_num == 'P0361':
+                                    print("P0361 not found or invalid, using default value 4")
+                                    params[param_num] = 4
                                 continue
+                
+                # If P0361 is still not set, set default value
+                if 'P0361' not in params:
+                    print("P0361 not found in file, using default value 4")
+                    params['P0361'] = 4
                 
                 # Only print key parameters
                 print("\nKey parameters found:")
@@ -104,99 +140,111 @@ class DataProcessor:
 
     @staticmethod
     def calculate_distance_per_pulse(cf1_params):
-        """
-        Calculate distance per pulse (cm)
-        P251: Speed in mm/s
-        P360: Motor speed in rpm
-        P361: Number of holes per wheel revolution
-        """
+        """Calculate distance per pulse in centimeters"""
         try:
-            p251 = cf1_params.get('P0251', 0)  # Speed in mm/s
-            p360 = cf1_params.get('P0360', 1)  # Motor speed in rpm
-            p361 = cf1_params.get('P0361', 1)  # Holes per revolution
-            p544 = cf1_params.get('P0544', 0)  # Pulses per second
+            # Get parameters
+            speed = cf1_params.get('P0251', 0)  # mm/s
+            pulses = cf1_params.get('P0544', 0)  # Hz
             
-            print("\nParameters for distance calculation:")
-            print(f"P251 (Speed): {p251} mm/s")
-            print(f"P360 (Motor speed): {p360} rpm")
-            print(f"P361 (Holes per rev): {p361}")
-            print(f"P544: {p544}")
+            if pulses == 0:
+                print("Error: P0544 cannot be zero")
+                return 0
             
-            # For P544 >= 1000, use P251*60/(P360*P361)
-            # Convert mm/s to cm
-            distance_per_pulse = (p251/10) * 60 / (p360 * p361)  # Result in cm
+            if speed == 0:
+                print("Error: P0251 cannot be zero")
+                return 0
             
-            print(f"Distance calculation: ({p251}/10) * 60 / ({p360} * {p361})")
-            print(f"Distance per pulse: {distance_per_pulse:.6f} cm")
-            return distance_per_pulse
+            # Check if P0544 has non-zero thousands digit
+            thousands_digit = (pulses // 1000) % 10
+            
+            print(f"\nParameters for distance calculation:")
+            print(f"P251 (Speed): {speed} mm/s")
+            print(f"P544: {pulses}")
+            
+            if thousands_digit > 0:
+                # Case 1: Use P0360 and P0361
+                motor_speed = cf1_params.get('P0360', 0)  # rpm
+                holes = cf1_params.get('P0361', 0)  # holes per rev
+                
+                if motor_speed == 0 or holes == 0:
+                    print("Error: P0360 and P0361 cannot be zero when P0544 has non-zero thousands digit")
+                    return 0
+                
+                print(f"P360 (Motor speed): {motor_speed} rpm")
+                print(f"P361 (Holes per rev): {holes}")
+                # Formula: P251 * 6 / (P360 * P361)
+                distance = (speed * 6) / (motor_speed * holes)  # Result in cm
+                print(f"Distance calculation (Case 1): ({speed}*6)/({motor_speed}*{holes}) = {distance:.3f} cm")
+                
+                # Remove duplicate calculation details
+                return distance
+            else:
+                # Case 2: Direct calculation without P0360 and P0361
+                distance = speed / pulses / 10  # Result in cm
+                print(f"Distance calculation (Case 2): {speed}/{pulses}/10 = {distance:.3f} cm")
+                return distance
             
         except Exception as e:
             print(f"Error calculating distance per pulse: {str(e)}")
             return 0
 
     @staticmethod
-    def generate_brake_curve(time_diffs, cf1_params):
-        """
-        Generate brake curve according to rule 1
-        time_diffs: Array of time differences (unit: 0.0125ms)
-        """
+    def generate_brake_curve(data, cf1_params):
+        """Generate brake curve data"""
         try:
-            print("\nGenerating brake curve:")
-            print(f"Input time_diffs shape: {time_diffs.shape}")
-            print(f"First few time_diffs: {time_diffs[:5]}")
-            
-            if len(time_diffs) == 0:
-                print("Error: Empty time differences array")
-                return {'x': np.array([]), 'y': np.array([])}
-            
-            # Calculate distance per pulse (cm)
+            # Calculate distance per pulse
             distance_per_pulse = DataProcessor.calculate_distance_per_pulse(cf1_params)
-            if distance_per_pulse == 0:
+            if distance_per_pulse <= 0:
                 print("Error: Invalid distance per pulse")
                 return {'x': np.array([]), 'y': np.array([])}
             
-            print(f"Distance per pulse: {distance_per_pulse:.6f} cm")
+            # Convert time differences to speed
+            times = np.array(data)  # units of 0.0125ms
+            speeds = []  # mm/s
+            total_time = 0
+            time_points = []
             
-            # Calculate actual time differences (ms)
-            time_diffs_ms = time_diffs * 0.0125
-            print(f"Time differences range: {time_diffs_ms.min():.3f} - {time_diffs_ms.max():.3f} ms")
+            # Check if using Case 1 or Case 2
+            thousands_digit = (cf1_params.get('P0544', 0) // 1000) % 10
             
-            # Calculate speeds (m/s)
-            velocities = np.zeros_like(time_diffs_ms)
-            non_zero_mask = time_diffs_ms > 0
+            print("\nProcessing time differences:")
+            print(f"Distance per pulse: {distance_per_pulse} cm")
+            print(f"First few raw times: {times[:5]} (units of 0.0125ms)")
             
-            # Calculate speeds for non-zero time differences
-            # Speed = distance(cm) / time(s)
-            # Convert time from ms to s: divide by 1000
-            # Convert distance from cm to m: divide by 100
-            velocities[non_zero_mask] = (distance_per_pulse / 100) / (time_diffs_ms[non_zero_mask] / 1000)
+            for t in times:
+                if t > 0:
+                    # Convert time from 0.0125ms units to seconds
+                    t_seconds = t * 0.0125 / 1000  # Convert to seconds
+                    
+                    if thousands_digit > 0:
+                        # Case 1: Speed calculation
+                        speed = (distance_per_pulse * 100) / t_seconds  # Convert to mm/s
+                    else:
+                        # Case 2: Speed calculation
+                        speed = (distance_per_pulse * 100) / t_seconds  # Convert to mm/s
+                    
+                    if len(speeds) < 5:  # Debug first few calculations
+                        print(f"Time: {t} units = {t_seconds*1000:.3f} ms")
+                        print(f"Speed calculation: ({distance_per_pulse}*100)/({t_seconds}) = {speed:.3f} mm/s")
+                else:
+                    speed = 0
+                
+                speeds.append(speed)
+                total_time += t * 0.0125 / 1000  # Add time in seconds
+                time_points.append(total_time)
             
-            # Time differences of 0 automatically result in speed of 0
-            print(f"Calculated velocities shape: {velocities.shape}")
-            print(f"Speed range: {velocities.min():.3f} - {velocities.max():.3f} m/s")
-            
-            # Calculate time array (s)
-            times = np.cumsum(time_diffs_ms) / 1000  # Convert to seconds
-            print(f"Time range: {times.min():.3f} - {times.max():.3f} s")
-            print(f"Total points in curve: {len(times)}")
-            
-            # Only remove inf/nan values, keep zeros
-            mask = ~(np.isnan(times) | np.isnan(velocities) | np.isinf(times) | np.isinf(velocities))
-            times = times[mask]
-            velocities = velocities[mask]
-            
-            print("Successfully generated curve data")
-            print(f"Final curve points: {len(times)}")
-            print(f"Zero time points: {np.sum(time_diffs_ms == 0)}")
-            print(f"Zero speed points: {np.sum(velocities == 0)}")
+            print(f"\nCurve generation complete:")
+            print(f"Total points: {len(speeds)}")
+            print(f"Time range: {time_points[0]:.3f} - {time_points[-1]:.3f} seconds")
+            print(f"Speed range: {min(speeds):.3f} - {max(speeds):.3f} mm/s")
             
             return {
-                'x': times,
-                'y': velocities
+                'x': np.array(time_points),
+                'y': np.array(speeds)
             }
             
         except Exception as e:
-            print(f"Error in generate_brake_curve: {str(e)}")
+            print(f"Error generating brake curve: {str(e)}")
             import traceback
             print(f"Traceback: {traceback.format_exc()}")
             return {'x': np.array([]), 'y': np.array([])}
@@ -212,6 +260,7 @@ class DataProcessor:
             Dictionary containing:
             - impact_index: Index of impact point
             - non_zero_count: Count of non-zero data points
+            - debug_info: Dictionary containing calculation details
         """
         try:
             if len(time_diffs) < 16:
@@ -220,6 +269,7 @@ class DataProcessor:
                 
             window_size = 16
             impact_index = None
+            debug_info = {}
             
             # Count non-zero values
             non_zero_count = np.sum(time_diffs != 0)
@@ -250,15 +300,30 @@ class DataProcessor:
                 above_threshold = sum(c > threshold for c in c_values)
                 
                 if above_threshold >= 3:
-                    impact_index = i + 12  # data13 position in current window
+                    impact_index = i + 13  # data13 position in current window
+                    
+                    # Store debug information
+                    debug_info = {
+                        'window_data': window.tolist(),
+                        'b_values': b_values,
+                        'c_values': c_values,
+                        'above_threshold_count': above_threshold
+                    }
                     break
             
             if impact_index is not None:
+                print(f"\nImpact Detection Details:")
                 print(f"Impact detected at data point {impact_index + 1}")
+                print(f"Window data: {debug_info['window_data']}")
+                print(f"B values: {[f'b{i+1}={v:.3f}' for i, v in enumerate(debug_info['b_values'])]}")
+                print(f"C values: {[f'c{i+1}={v:.3f}' for i, v in enumerate(debug_info['c_values'])]}")
+                print(f"Values above threshold ({threshold}): {debug_info['above_threshold_count']}")
                 print(f"Non-zero data points: {non_zero_count}")
+                
                 return {
                     'impact_index': impact_index,
-                    'non_zero_count': non_zero_count
+                    'non_zero_count': non_zero_count,
+                    'debug_info': debug_info
                 }
             else:
                 print("No impact point detected")
