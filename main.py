@@ -380,12 +380,13 @@ class BrakeCurveApp(QMainWindow):
                 print("Error: No valid curve data generated")
                 return
             
-            self.ax.plot(curve_data['x'], curve_data['y'])
+            # Plot main curve - convert speeds from mm/s to m/s for display only
+            self.ax.plot(curve_data['x'], curve_data['y']/10000)  # Divide by 1000 to convert mm/s to m/s
             self.ax.grid(True)
             self.ax.set_xlabel('Time (s)')
-            self.ax.set_ylabel('Speed (mm/s)')
+            self.ax.set_ylabel('Speed (m/s)')
             
-            # Update title to show all parameters
+            # Update title with parameters
             title = (f'Brake Curve\n'
                     f'P251: {self.cf1_params.get("P0251")} mm/s, '
                     f'P360: {self.cf1_params.get("P0360")} rpm\n'
@@ -460,7 +461,7 @@ class BrakeCurveApp(QMainWindow):
         self.ax.plot(self.curve_data['x'][:end_idx], self.curve_data['y'][:end_idx])
         self.ax.grid(True)
         self.ax.set_xlabel('Time (s)')
-        self.ax.set_ylabel('Speed (mm/s)')
+        self.ax.set_ylabel('Speed (m/s)')
         self.ax.set_title('Brake Curve')
         
         # Set fixed axis limits
