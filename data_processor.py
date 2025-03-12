@@ -7,8 +7,8 @@ class DataProcessor:
         """
         Read time difference data from DATA file with special handling:
         - First 16 values are always read
-        - After that, only read increasing non-zero values
-        - Stop reading when a decreasing value is found (but keep that value)
+        - After that, stop reading when a value is less than previous value (include that value)
+        - Stop reading when encountering zero
         """
         try:
             print(f"\nDEBUG: Reading DATA file:")
@@ -50,19 +50,29 @@ class DataProcessor:
                     last_value = numbers[-1]
                     for i in range(16, len(raw_numbers)):
                         current_value = raw_numbers[i]
+                        
+                        # Stop if we encounter a zero
                         if current_value == 0:
-                            continue  # Skip zero values
+                            break
                             
-                        if current_value <= last_value:
-                            # Include the decreasing value but stop processing
+                        # Include current value and stop if it decreases
+                        if current_value < last_value:
                             numbers.append(current_value)
                             break
                         
                         numbers.append(current_value)
                         last_value = current_value
                 else:
-                    # If less than 16 values, include all non-zero values
-                    numbers = [x for x in raw_numbers if x != 0]
+                    # If less than 16 values, process until zero or decrease
+                    last_value = None
+                    for value in raw_numbers:
+                        if value == 0:
+                            break
+                        if last_value is not None and value < last_value:
+                            numbers.append(value)  # Include the decreasing value
+                            break
+                        numbers.append(value)
+                        last_value = value
                 
                 print(f"DATA file processing summary:")
                 print(f"Total lines: {line_count}")
@@ -72,7 +82,6 @@ class DataProcessor:
                     print(f"First 16 values: {numbers[:16]}")
                     print(f"Last few values: {numbers[-5:]}")
                     print(f"Time range: {min(numbers)} - {max(numbers)} (0.0125ms units)")
-                    print(f"Number of zero values: {sum(1 for x in numbers if x == 0)}")
                 
                 return np.array(numbers)
                 
