@@ -56,7 +56,7 @@ class DataProcessor:
                             break
                             
                         # Include current value and stop if it decreases
-                        if current_value < last_value:
+                        if current_value+50 < last_value:
                             numbers.append(current_value)
                             break
                         
@@ -68,7 +68,7 @@ class DataProcessor:
                     for value in raw_numbers:
                         if value == 0:
                             break
-                        if last_value is not None and value < last_value:
+                        if last_value is not None and (value+50) < last_value:  #bugfix：有时前一个会比后一个大50
                             numbers.append(value)  # Include the decreasing value
                             break
                         numbers.append(value)

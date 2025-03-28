@@ -1,0 +1,5 @@
+PyQt5==5.15.9
+matplotlib==3.9.4
+pandas==2.2.3
+numpy==2.0.2
+# Python 3.9.13 is recommended for this project 
